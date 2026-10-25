@@ -82,7 +82,7 @@ class LiveAgent(Agent):
         estimated_qty=rule.quantity(D(order['qty'])*(1-D(engine.FEE)))
         stop=rule.stop(order['stop'])
         rule.validate(estimated_qty,stop)
-        if quote<D(10):raise ValueError('Below strategy minimum entry')
+        if quote<D(engine.setting('MIN_POSITION_USDT',10)):raise ValueError('Below strategy minimum entry')
         item=self.journal.intent(symbol,'BUY','MARKET',quoteOrderQty=quote)
         self.state['positions'][symbol]=dict(symbol=symbol,base_asset=rule.info['baseAsset'],
             phase='BUYING',buy=item,stop_order=None,exit_orders=[],qty=0,entry=0,stop=0,
@@ -107,7 +107,7 @@ class LiveAgent(Agent):
             net=qty-base_fee
             entry=quote/qty
             # Freeze relative stop to actual VWAP. Tick rounds UP, never widens risk.
-            raw_stop=entry-2*D(p['atr'])
+            raw_stop=entry-D(engine.setting('ATR_MULTIPLIER',2))*D(p['atr'])
             try:stop=rule.stop(raw_stop) if raw_stop>0 else D(0)
             except ValueError:stop=D(0)
             p.update(qty=float(net),entry=float(entry),stop=float(stop),cost=float(quote+quote_fee),phase='PROTECTING')
