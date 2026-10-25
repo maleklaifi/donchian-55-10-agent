@@ -165,7 +165,7 @@ class Agent:
                     self.state['processed'][symbol] = day
                 else:
                     ind = self.daily(symbol, day)
-                    if ind['sell']:
+                    if ind['sell'] and not self.state.get('automation_stopped'):
                         engine.close(self.state, symbol, price, now, 'DONCHIAN_10_CLOSE')
                         self.state['processed'][symbol] = day
                         self.record(symbol, now, 'SELL', 'DONCHIAN_10_CLOSE', **ind)
@@ -173,7 +173,7 @@ class Agent:
             except Exception as exc:
                 errors.append(f'{symbol}: {exc}')
         selected = self.selection(now)
-        for symbol in selected:
+        for symbol in ([] if self.state.get('automation_paused') else selected):
             if symbol in self.state['positions'] or symbol in stopped or self.state['processed'].get(symbol) == day:
                 continue
             if errors:
@@ -235,14 +235,24 @@ class Handler(BaseHTTPRequestHandler):
         return hmac.compare_digest(self.headers.get('Authorization',''),expected)
 
     def do_POST(self):
-        if self.path!='/api/settings':return self.send(404,b'Not found','text/plain')
+        if self.path not in ('/api/settings','/api/control'):return self.send(404,b'Not found','text/plain')
         if not self.authenticated():return self.send(401,b'Authentication required','text/plain')
         if not hmac.compare_digest(self.headers.get('X-CSRF-Token',''),self.csrf_token):
             return self.send(403,b'Reload the dashboard before saving','text/plain')
         try:
             length=int(self.headers.get('Content-Length','0'))
             if not 0<length<=8192:raise ValueError('Invalid request size')
-            values=settings.validate(json.loads(self.rfile.read(length)))
+            payload=json.loads(self.rfile.read(length))
+            if self.path=='/api/control':
+                import controls
+                try:
+                    with LOCK:result=controls.execute(self.agent,payload)
+                    return self.send(200,json.dumps(result).encode(),'application/json')
+                except Exception as exc:
+                    with LOCK:
+                        self.store.state['errors']=[str(exc)];self.store.save()
+                    return self.send(409,json.dumps({'error':str(exc),'message':'Inspect exchange/order status before retrying a trade.'}).encode(),'application/json')
+            values=settings.validate(payload)
             with LOCK:
                 if any(p.get('phase','OPEN')!='OPEN' for p in self.store.state['positions'].values()):
                     raise ValueError('Wait for pending orders to finish before changing settings')

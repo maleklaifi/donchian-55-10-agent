@@ -29,7 +29,7 @@ class LiveAgent(Agent):
             self.filters[symbol]=Filters(info['symbols'][0])
         return self.filters[symbol]
 
-    def account(self):
+    def account(self,sync_balance=False):
         result=self.client.call('GET','account')
         if not result.get('canTrade') or result.get('accountType')!='SPOT':
             raise RuntimeError('Account must have Spot trading permission')
@@ -56,7 +56,15 @@ class LiveAgent(Agent):
                 raise RuntimeError('Insufficient free USDT for INITIAL_CAPITAL allocation')
             self.state['bootstrapped']=True
             self.store.save()
-        if balances.get('USDT',(D(0),D(0)))[0]+D('0.00000001')<D(self.state['cash']):
+        free_usdt=balances.get('USDT',(D(0),D(0)))[0]
+        self.state['exchange_free_usdt']=float(free_usdt)
+        if sync_balance or self.state.get('balance_auto_sync'):
+            previous=self.state['cash']
+            self.state['cash']=float(free_usdt)
+            self.state['balance_auto_sync']=True
+            self.state['balance_adjustments']=self.state.get('balance_adjustments',0)+float(free_usdt)-previous
+            self.store.save()
+        if free_usdt+D('0.00000001')<D(self.state['cash']):
             raise RuntimeError('Free USDT below strategy cash; withdrawals/manual activity or fees require reconciliation')
         return balances
 
@@ -206,7 +214,7 @@ class LiveAgent(Agent):
                 price=float(self.client.call('GET','ticker/price',{'symbol':symbol},signed=False)['price'])
                 if not __import__('math').isfinite(price) or price<=0:raise ValueError('Invalid mark')
                 prices[symbol]=price;p['mark']=price
-                if p['phase']=='OPEN' and self.daily(symbol,day)['sell']:
+                if p['phase']=='OPEN' and not self.state.get('automation_stopped') and self.daily(symbol,day)['sell']:
                     p.update(exit_requested=True,exit_reason='DONCHIAN_10_CLOSE')
                     self.store.save();self.reconcile(symbol,now)
             except Exception as exc:errors.append(f'{symbol}: {exc}')
@@ -217,7 +225,7 @@ class LiveAgent(Agent):
         if os.environ.get('PAUSE_ENTRIES','false').lower()=='true':errors.append('New entries paused by operator; existing positions remain managed')
         if any(p['phase']!='OPEN' or p.get('protection_status','NEW')!='NEW' for p in self.state['positions'].values()):
             errors.append('Order reconciliation pending; new entries paused')
-        for symbol in selected:
+        for symbol in ([] if self.state.get('automation_paused') else selected):
             if errors:break
             if symbol in self.state['positions'] or self.state['processed'].get(symbol)==day:continue
             try:

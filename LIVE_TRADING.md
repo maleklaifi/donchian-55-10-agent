@@ -69,3 +69,13 @@ Official Binance references consulted:
 - https://developers.binance.com/en/docs/catalog/core-trading-spot-trading/api/rest-api/account
 - https://developers.binance.com/en/docs/products/spot/filters
 - https://developers.binance.com/en/docs/products/spot/faqs/spot_glossary
+
+## Dashboard operator controls
+
+Manual buy/sell controls now submit orders through the same execution adapter when the service is in live mode (simulated in paper mode). Manual buys bypass monthly membership, breakout confirmation and the daily time window; risk/cash/position limits and ATR protection still apply. Sell closes only a bot-managed position. These manual trades change the portfolio and are not part of the historical strategy backtest. Every operation requires authenticated access and a CSRF token; the dashboard asks you to confirm it.
+
+Pause automatic entries prevents automatic new buys but continues daily exits, exchange reconciliation and protection. Manual orders remain available. For a complete process stop, stop the hosting service; acknowledged native stops remain on Binance, and channel exits then cease. The dashboard intentionally does not terminate the web process.
+
+Use actual account balance explicitly opts into sizing with ALL free USDT in the dedicated account. After this selection, free USDT is synchronized each cycle; deposits/withdrawals are recorded as balance adjustments, not trading profits. Existing managed assets remain part of marked equity; unrelated holdings/orders still block activity. This overrides the earlier fixed initial allocation behavior. Until you select it, the fixed allocation remains in force.
+
+Stop strategy automation is also available: it suspends automatic entries AND daily channel exits while retaining protective stop management and order reconciliation. Resume restores both. Pending protective/emergency exits already requested are still completed. Neither stop control liquidates existing holdings. Manual actions remain enabled. To terminate the entire process, use the hosting service stop control; that also disables reconciliation.
