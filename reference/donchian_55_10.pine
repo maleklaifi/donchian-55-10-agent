@@ -1,0 +1,60 @@
+//@version=6
+strategy("Donchian 55/10 · frozen ATR stop", overlay=true, initial_capital=200, pyramiding=0, commission_type=strategy.commission.percent, commission_value=0.20, process_orders_on_close=false, calc_on_order_fills=false, margin_long=100)
+// Single-chart emulator. Percentage slippage is NOT implemented by Pine's tick slippage.
+// Use a BINANCE spot USDT chart, 1D. Enable entries only for the monthly selected symbols.
+entryLen = input.int(55, "Entry days", minval=1)
+exitLen = input.int(10, "Exit days (20 for reference)", minval=1)
+riskPct = input.float(0.5, "Risk % of chart equity", minval=0.01, step=0.1)
+maxUSDT = input.float(100, "Maximum entry USDT", minval=1)
+minUSDT = input.float(10, "Minimum entry USDT", minval=0)
+entryEnabled = input.bool(false, "Allow entries: symbol is in this month's top 5")
+start = input.time(timestamp("01 Jan 2026 00:00 +0000"), "First signal candle")
+if not timeframe.isdaily or timeframe.multiplier != 1
+    runtime.error("Use the 1D timeframe.")
+hi = ta.highest(high, entryLen)[1]
+lo = ta.lowest(low, exitLen)[1]
+atr = ta.atr(20)
+fee = 0.002
+slip = 0.0005
+// Order quantity must be set before the unknown next-open fill: estimate using signal close.
+estFill = close * (1 + slip)
+distance = 2 * atr
+stopTicks = math.max(1, int(math.round(distance / syminfo.mintick)))
+estStop = estFill - stopTicks * syminfo.mintick
+lossPerUnit = estFill * (1 + fee) - estStop * (1 - slip) * (1 - fee)
+budget = math.max(strategy.equity, 0) * riskPct / 100
+cashCap = math.min(maxUSDT, math.max(strategy.equity, 0) * 0.50)
+qty = lossPerUnit > 0 ? math.min(budget / lossPerUnit, cashCap / (estFill * (1 + fee))) : 0
+valid = not na(hi) and not na(atr) and estStop > 0 and qty * estFill >= minUSDT
+buy = barstate.isconfirmed and time >= start and entryEnabled and strategy.position_size == 0 and close > hi and valid
+sell = barstate.isconfirmed and strategy.position_size > 0 and close < lo
+var int frozenTicks = na
+if buy
+    frozenTicks := stopTicks
+    strategy.entry("Long", strategy.long, qty=qty, alert_message="ENTRY fill. Apply portfolio checks externally.")
+    // Relative loss is anchored to the emulator's eventual actual entry fill.
+    // Bracket submitted WITH entry: no wait until entry-day close for stop protection.
+    strategy.exit("ATR stop", "Long", loss=frozenTicks, alert_message="FROZEN ATR STOP fill")
+    alert("BUY signal " + syminfo.ticker + " | estimated USDT=" + str.tostring(qty * estFill, "#.##") + " | signal ATR=" + str.tostring(atr, format.mintick), alert.freq_once_per_bar_close)
+if strategy.position_size > 0
+    strategy.exit("ATR stop", "Long", loss=frozenTicks, alert_message="FROZEN ATR STOP fill")
+if sell
+    strategy.close("Long", alert_message="DONCHIAN EXIT fill")
+    alert("CHANNEL EXIT signal " + syminfo.ticker, alert.freq_once_per_bar_close)
+stopLine = strategy.position_size > 0 ? strategy.position_avg_price - frozenTicks * syminfo.mintick : na
+plot(hi, "Prior 55-day high", color=color.green)
+plot(lo, "Prior exit-channel low", color=color.orange)
+plot(strategy.position_size > 0 ? strategy.position_avg_price : na, "Entry fill", color=color.blue, style=plot.style_linebr)
+plot(stopLine, "Frozen stop", color=color.red, linewidth=2, style=plot.style_linebr)
+var table panel = table.new(position.top_right, 2, 5, bgcolor=color.new(color.black, 10))
+if barstate.islast
+    table.cell(panel, 0, 0, "Monthly entry permission", text_color=color.white)
+    table.cell(panel, 1, 0, entryEnabled ? "ON" : "OFF", text_color=entryEnabled ? color.lime : color.orange)
+    table.cell(panel, 0, 1, "Estimated next position USDT", text_color=color.white)
+    table.cell(panel, 1, 1, str.tostring(qty * estFill, "#.##"), text_color=color.white)
+    table.cell(panel, 0, 2, "Current position USDT", text_color=color.white)
+    table.cell(panel, 1, 2, str.tostring(strategy.position_size * close, "#.##"), text_color=color.white)
+    table.cell(panel, 0, 3, "Frozen stop", text_color=color.white)
+    table.cell(panel, 1, 3, str.tostring(stopLine, format.mintick), text_color=color.white)
+    table.cell(panel, 0, 4, "Portfolio risk check", text_color=color.white)
+    table.cell(panel, 1, 4, "EXTERNAL REQUIRED", text_color=color.orange)
