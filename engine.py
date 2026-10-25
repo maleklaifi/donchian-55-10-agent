@@ -1,9 +1,10 @@
 """Deterministic paper portfolio. All monetary amounts are USDT."""
 import math
 import os
+import settings
 
 def setting(name, default):
-    value=float(os.environ.get(name,default))
+    value=float(settings.OVERRIDES.get(name,os.environ.get(name,default)))
     if not math.isfinite(value) or value<=0:
         raise ValueError(name+" must be positive and finite")
     return value

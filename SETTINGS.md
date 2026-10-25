@@ -20,3 +20,9 @@ Periods must be integers 1–500. Values must be positive and finite. MAX_POSITI
 The monthly selection remains the attached top-five policy. INITIAL_CAPITAL initializes a new ledger only: changing it does not change a running portfolio's balance. MODE, credentials and PAUSE_ENTRIES remain documented in LIVE_TRADING.md.
 
 Changing these defaults changes the strategy; previous research results no longer describe that modified configuration. The dashboard's static rule summary describes defaults; consult configured environment values for overrides.
+
+## Dashboard controls
+
+The dashboard now has a Settings form and Save settings button. Authenticate with the configured dashboard password. Changes are validated and saved to the current mode's SQLite ledger, override environment defaults, and apply without redeployment. The daily indicator cache is cleared. Already processed daily decisions are not replayed. Pending exchange orders block changes until reconciliation finishes. Existing stops and position quantities remain fixed; future channel exits use the new exit period.
+
+The form controls the variables in the table above. Execution mode, API credentials and account allocation are not editable from this form. Requests require dashboard authentication plus a session CSRF token. Paper/testnet/live keep separate saved overrides. The maximum supported position count is five, matching the monthly entry universe.

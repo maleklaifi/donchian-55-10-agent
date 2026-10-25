@@ -15,6 +15,8 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import engine
+import settings
+import secrets
 from monthly_top5 import request
 
 ROOT = Path(__file__).resolve().parent
@@ -44,6 +46,8 @@ class Store:
             last_success=None, errors=[], selection=None, mode=mode.upper(), version=1)
         if self.state['mode'] != mode.upper():
             raise ValueError('Stored portfolio mode does not match configured mode')
+        settings.OVERRIDES.clear()
+        settings.OVERRIDES.update(self.state.get('settings',{}))
         self.save()
 
     def save(self):
@@ -221,6 +225,39 @@ class Agent:
 
 class Handler(BaseHTTPRequestHandler):
     store = None
+    agent = None
+    csrf_token = secrets.token_urlsafe(32)
+
+    def authenticated(self):
+        if not TOKEN:return False
+        import base64
+        expected='Basic '+base64.b64encode(('admin:'+TOKEN).encode()).decode()
+        return hmac.compare_digest(self.headers.get('Authorization',''),expected)
+
+    def do_POST(self):
+        if self.path!='/api/settings':return self.send(404,b'Not found','text/plain')
+        if not self.authenticated():return self.send(401,b'Authentication required','text/plain')
+        if not hmac.compare_digest(self.headers.get('X-CSRF-Token',''),self.csrf_token):
+            return self.send(403,b'Reload the dashboard before saving','text/plain')
+        try:
+            length=int(self.headers.get('Content-Length','0'))
+            if not 0<length<=8192:raise ValueError('Invalid request size')
+            values=settings.validate(json.loads(self.rfile.read(length)))
+            with LOCK:
+                if any(p.get('phase','OPEN')!='OPEN' for p in self.store.state['positions'].values()):
+                    raise ValueError('Wait for pending orders to finish before changing settings')
+                previous=self.store.state.get('settings',{})
+                self.store.state['settings']=values
+                try:self.store.save()
+                except Exception:
+                    self.store.state['settings']=previous
+                    raise
+                settings.OVERRIDES.clear();settings.OVERRIDES.update(values)
+                if self.agent:self.agent.daily_cache.clear()
+            return self.send(200,b'{"saved":true}','application/json')
+        except (ValueError,TypeError) as exc:
+            return self.send(400,json.dumps({'error':str(exc)}).encode(),'application/json')
+
     def do_GET(self):
         if self.path == '/healthz':
             return self.send(200, json.dumps({'status':'up','mode':self.store.state['mode']}).encode(), 'application/json')
@@ -232,6 +269,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header('WWW-Authenticate', 'Basic realm="Donchian"')
                 self.end_headers()
                 return
+        if self.path == '/api/settings':
+            if not self.authenticated():return self.send(401,b'Authentication required','text/plain')
+            return self.send(200,json.dumps({'values':settings.current(),'csrf':self.csrf_token}).encode(),'application/json')
         if self.path == '/':
             return self.send(200, (ROOT/'dashboard.html').read_bytes(), 'text/html; charset=utf-8')
         if self.path == '/api/state':
@@ -290,6 +330,7 @@ def main():
         sys.modules['app']=sys.modules[__name__]
         from live_agent import LiveAgent
         agent=LiveAgent(Handler.store,mode)
+    Handler.agent=agent
     worker = threading.Thread(target=agent.run, daemon=True)
     server = ThreadingHTTPServer(('0.0.0.0', int(os.environ.get('PORT','8080'))), Handler)
     def stop(*_):
