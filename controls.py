@@ -4,9 +4,17 @@ import engine
 def execute(agent, command):
     state=agent.state
     action=command.get('action')
+    if action=='start':
+        if hasattr(agent,'client'):
+            agent.account(sync_balance=True)
+            if state.get('live_halt'):raise ValueError('Resolve the account error before starting')
+        state.update(automation_paused=False,automation_stopped=False,operator_started=True)
+        agent.store.save()
+        return {'message':'Agent started. Balance is detected automatically; waiting for eligible strategy signals.'}
     if action in ('pause','stop','resume'):
         state['automation_paused']=action in ('pause','stop')
         state['automation_stopped']=action=='stop'
+        state['operator_started']=action=='resume'
         agent.store.save()
         return {'message':{'pause':'Automatic entries paused; exits and stops remain managed.','stop':'Strategy entries and channel exits stopped; protective stops and reconciliation remain active.','resume':'Strategy automation resumed.'}[action]}
     if action=='balance':
@@ -31,7 +39,7 @@ def execute(agent, command):
     if symbol in state['positions']:raise ValueError('Symbol already held')
     if any(p.get('phase','OPEN')!='OPEN' for p in state['positions'].values()):raise ValueError('Order reconciliation pending')
     if hasattr(agent,'client'):
-        agent.account()
+        agent.account(sync_balance=True)
         if state.get('live_halt'):raise ValueError('Resolve the account halt before buying')
     now=agent.client.sync_time() if hasattr(agent,'client') else int(agent.api('time')['serverTime'])
     day=now//engine.DAY*engine.DAY

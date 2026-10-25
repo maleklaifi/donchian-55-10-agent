@@ -21,6 +21,7 @@ class LiveAgent(Agent):
         self.state.setdefault('dust',{})
         self.state.setdefault('live_halt',None)
         self.state.setdefault('bootstrapped',False)
+        self.state.setdefault('balance_auto_sync',True)
         self.filters={}
 
     def rules(self,symbol):
@@ -52,7 +53,7 @@ class LiveAgent(Agent):
             if free+locked != D(expected.get(asset,0)):
                 raise RuntimeError(f'{asset}: account holdings differ from ledger; new entries paused')
         if not self.state['bootstrapped']:
-            if balances.get('USDT',(D(0),D(0)))[0]<D(self.state['initial_capital']):
+            if not (sync_balance or self.state.get('balance_auto_sync')) and balances.get('USDT',(D(0),D(0)))[0]<D(self.state['initial_capital']):
                 raise RuntimeError('Insufficient free USDT for INITIAL_CAPITAL allocation')
             self.state['bootstrapped']=True
             self.store.save()
@@ -222,7 +223,7 @@ class LiveAgent(Agent):
         except Exception as exc:errors.append(str(exc))
         selected=self.selection(now)
         if self.state['live_halt']:errors.append(self.state['live_halt'])
-        if os.environ.get('PAUSE_ENTRIES','false').lower()=='true':errors.append('New entries paused by operator; existing positions remain managed')
+        if os.environ.get('PAUSE_ENTRIES','false').lower()=='true' and not self.state.get('operator_started'):errors.append('New entries paused by operator; existing positions remain managed')
         if any(p['phase']!='OPEN' or p.get('protection_status','NEW')!='NEW' for p in self.state['positions'].values()):
             errors.append('Order reconciliation pending; new entries paused')
         for symbol in ([] if self.state.get('automation_paused') else selected):

@@ -28,3 +28,18 @@ class LiveControlTests(unittest.TestCase):
    controls.execute(agent,dict(action='balance'))
    self.assertEqual(agent.state['cash'],float(client.cash))
    self.assertTrue(agent.state['balance_auto_sync']);store.db.close()
+
+class SimpleStartTests(unittest.TestCase):
+ def test_start_and_stop(self):
+  with tempfile.TemporaryDirectory() as d:
+   store=app.Store(Path(d));agent=app.Agent(store)
+   controls.execute(agent,{'action':'start'})
+   self.assertTrue(agent.state['operator_started']);self.assertFalse(agent.state['automation_paused'])
+   controls.execute(agent,{'action':'stop'})
+   self.assertTrue(agent.state['automation_stopped']);self.assertFalse(agent.state['operator_started']);store.db.close()
+ def test_start_detects_small_live_balance(self):
+  with tempfile.TemporaryDirectory() as d:
+   store=app.Store(Path(d),'testnet');client=FakeExchange();client.cash=50
+   agent=LiveAgent(store,'testnet',client)
+   controls.execute(agent,{'action':'start'})
+   self.assertEqual(agent.state['cash'],50);self.assertTrue(agent.state['balance_auto_sync']);store.db.close()
