@@ -1,4 +1,4 @@
-"""Public-data-only paper agent; no exchange credentials or order endpoints."""
+"""Donchian service: paper by default, explicitly enabled Spot execution optional."""
 import datetime as dt
 import fcntl
 import hmac
@@ -29,9 +29,9 @@ LOG = logging.getLogger('donchian')
 
 
 class Store:
-    def __init__(self, directory):
+    def __init__(self, directory, mode="paper"):
         directory.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(directory/'agent.sqlite3', check_same_thread=False)
+        self.db = sqlite3.connect(directory/('agent.sqlite3' if mode=='paper' else mode+'.sqlite3'), check_same_thread=False)
         self.db.execute('PRAGMA journal_mode=WAL')
         self.db.execute('PRAGMA synchronous=FULL')
         self.db.execute('CREATE TABLE IF NOT EXISTS state (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL)')
@@ -41,7 +41,9 @@ class Store:
             raise ValueError('INITIAL_CAPITAL must be positive and finite')
         self.state = json.loads(row[0]) if row else dict(cash=capital, initial_capital=capital,
             positions={}, closed=[], decisions=[], processed={}, last_cycle=None,
-            last_success=None, errors=[], selection=None, mode='PAPER', version=1)
+            last_success=None, errors=[], selection=None, mode=mode.upper(), version=1)
+        if self.state['mode'] != mode.upper():
+            raise ValueError('Stored portfolio mode does not match configured mode')
         self.save()
 
     def save(self):
@@ -221,7 +223,7 @@ class Handler(BaseHTTPRequestHandler):
     store = None
     def do_GET(self):
         if self.path == '/healthz':
-            return self.send(200, b'{"status":"up","mode":"PAPER"}', 'application/json')
+            return self.send(200, json.dumps({'status':'up','mode':self.store.state['mode']}).encode(), 'application/json')
         if TOKEN:
             import base64
             expected = 'Basic '+base64.b64encode(('admin:'+TOKEN).encode()).decode()
@@ -235,7 +237,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == '/api/state':
             # Read committed snapshot through a separate SQLite connection; dashboard
             # remains responsive during network retries and monthly selection.
-            with sqlite3.connect(DATA/'agent.sqlite3') as db:
+            filename='agent.sqlite3' if self.store.state['mode']=='PAPER' else self.store.state['mode'].lower()+'.sqlite3'
+            with sqlite3.connect(DATA/filename) as db:
                 row = db.execute('SELECT body FROM state WHERE id=1').fetchone()
             return self.send(200, row[0].encode(), 'application/json')
         self.send(404, b'Not found', 'text/plain')
@@ -254,10 +257,20 @@ class Handler(BaseHTTPRequestHandler):
             LOG.info(fmt, *args)
 
 
+def execution_mode():
+    mode=os.environ.get('MODE','paper').lower()
+    if mode not in ('paper','testnet','live'):
+        raise ValueError('MODE must be paper, testnet or live')
+    if mode=='live' and os.environ.get('LIVE_TRADING_ACK')!='I_ACCEPT_REAL_MONEY_RISK':
+        raise ValueError('Live orders disabled: explicit LIVE_TRADING_ACK is required')
+    if mode!='paper' and not os.environ.get('DASHBOARD_TOKEN'):
+        raise ValueError('DASHBOARD_TOKEN is required for exchange-connected modes')
+    return mode
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
-    if os.environ.get('MODE','paper').lower() != 'paper':
-        raise SystemExit('Only paper mode is implemented. No real orders are supported.')
+    mode=execution_mode()
     if os.environ.get('RAILWAY_SERVICE_ID'):
         if os.environ.get('RAILWAY_VOLUME_MOUNT_PATH') != str(DATA):
             raise SystemExit('Attach a dedicated Railway volume at DATA_DIR before starting.')
@@ -269,8 +282,14 @@ def main():
         fcntl.flock(lockfile, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         raise SystemExit('Another agent already uses this DATA_DIR')
-    Handler.store = Store(DATA)
-    agent = Agent(Handler.store)
+    Handler.store = Store(DATA,mode)
+    if mode=='paper':
+        agent=Agent(Handler.store)
+    else:
+        # Ensure the imported runner shares this process's shutdown event.
+        sys.modules['app']=sys.modules[__name__]
+        from live_agent import LiveAgent
+        agent=LiveAgent(Handler.store,mode)
     worker = threading.Thread(target=agent.run, daemon=True)
     server = ThreadingHTTPServer(('0.0.0.0', int(os.environ.get('PORT','8080'))), Handler)
     def stop(*_):
@@ -279,7 +298,7 @@ def main():
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
     worker.start()
-    LOG.info('PAPER agent dashboard listening on %s', server.server_port)
+    LOG.info('%s agent dashboard listening on %s', mode.upper(), server.server_port)
     server.serve_forever()
     HALT.set()
     if agent.ranker and agent.ranker.poll() is None:

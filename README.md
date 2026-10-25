@@ -1,8 +1,10 @@
-# Donchian 55/10 paper agent
+# Donchian 55/10 agent
 
 An independent, standard-library Python service based on the supplied **Donchian_55_10_Trading_Tools(1).zip**. Includes monthly selection, daily signals, a shared simulated portfolio, frozen stops, durable state, a dashboard, Docker packaging and tests. No connection to, shared files with, or changes to the NR7 agent.
 
-**Paper trading only. This repository never submits Binance orders.** Setting MODE=live fails at startup. Do not add Binance account keys. The original files are preserved byte-for-byte in `reference/`.
+**Paper is the default. Optional Binance Spot live/testnet execution is now implemented; see [LIVE_TRADING.md](LIVE_TRADING.md) for activation, account requirements and limitations. Live execution has not been authenticated or exchange-tested here.** The original files are preserved byte-for-byte in `reference/`.
+
+The following execution description and cost model describe **paper mode**. Live mode uses actual exchange fills and native stops as explained in LIVE_TRADING.md.
 
 ## Strategy mapping
 
@@ -31,7 +33,7 @@ For market price P and signal ATR A: `fill=P*1.0005`, `stop=fill-2*A`, `loss_per
 The source ZIP contains a single-chart Pine template and a forward selector, **not the audited v3.20 portfolio engine**. Signal lookbacks, selection policy and default sizing inputs are preserved. This is not a certified identical reproduction of that engine or TradingView's fill sequence. Decisions not specified by the ZIP are explicit here:
 
 - Shared equity is cash plus held quantities marked at their latest fetched prices. Simultaneous entries use monthly volume-rank order (symbol as tie-breaker, inherited from selector). Portfolio risk means the sum of initial cost-inclusive stop budgets, not mark-to-stop exposure.
-- Sizing uses the observed paper fill, not Pine's pre-fill estimate. Stops use exact 2×ATR without Pine's nearest-tick rounding; simulated quantities are fractional and do not enforce exchange lot filters. This is not a live execution adapter.
+- Sizing uses the observed paper fill, not Pine's pre-fill estimate. Stops use exact 2×ATR without Pine's nearest-tick rounding; simulated quantities are fractional and do not enforce exchange lot filters. The optional live adapter applies exchange filters separately.
 - ATR is seeded with the first 20 true ranges in up to 1,000 closed daily candles, then uses Wilder smoothing. A different history seed may produce tiny differences from TradingView.
 - UTC daily close is checked on a 15-second loop, around **01:00 Tunisia time**. Network requests add latency. Entry window is five minutes after midnight UTC; late startup, unavailable data or a slow month-boundary ranking can skip that day's entry. No retrospective entry fills are invented.
 - Monthly ranking uses the original scanner in a separate process so it does not block stops. Its only code change is atomic publication of selection.json. The original candidate pool uses the current exchange snapshot, not historical delisted membership. Failed rankings are retried after five minutes; no old monthly list is substituted. This is forward operation, not a historical backtest.
@@ -41,7 +43,7 @@ The source ZIP contains a single-chart Pine template and a forward selector, **n
 
 ## Deploy as another service in your existing Railway project
 
-1. Create a **new private GitHub repository** named `donchian-55-10-agent` and push these files (see below).
+1. Use the existing private repository `maleklaifi/donchian-55-10-agent` (or create your own copy).
 2. Open the Railway project that currently contains NR7. Add a **new service from this GitHub repository**. Name it `donchian-55-10-agent`. Do not change the NR7 service's source or settings.
 3. Attach a **new, dedicated persistent volume** to the new service, mounted at `/data`. Do not reuse the NR7 volume. The agent refuses to start on Railway without a matching volume mount.
 4. Set these variables on the new service:
@@ -104,6 +106,8 @@ Visit http://localhost:8080. Optional: export DASHBOARD_TOKEN before launching t
 ## Operations and files
 
 - `engine.py`: signals, sizing, paper entries/exits and accounting.
+- `binance_live.py` / `live_agent.py`: opt-in Spot execution, filters and order reconciliation.
+- `LIVE_TRADING.md`: real-money setup, explicit activation and recovery limits.
 - `app.py`: worker, persistence, health endpoint and read-only dashboard API.
 - `monthly_top5.py`: original selector plus atomic selection publishing.
 - `dashboard.html`: equity/cash, monthly universe, holdings, closed trades and recent decisions.
