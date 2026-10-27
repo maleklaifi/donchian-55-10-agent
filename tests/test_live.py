@@ -114,6 +114,10 @@ class LifecycleTests(unittest.TestCase):
         return self.store.state['positions']['BTCUSDT']
     def test_buy_attaches_stop_and_accounts_base_commission(self):
         p=self.buy();self.assertEqual(p['phase'],'OPEN')
+        self.assertEqual(p['risk_check']['result'],'PASSED')
+        self.assertEqual(p['risk_check']['cause'],'WITHIN_LIMIT')
+        self.assertLessEqual(D(p['risk_check']['estimated_loss']),D(p['risk_check']['threshold']))
+        self.assertGreater(D(p['risk_check']['base_fee']),0)
         self.assertEqual(self.client.sent[1]['type'],'STOP_LOSS')
         self.assertLess(D(self.client.sent[1]['quantity']),D(self.client.orders[p['buy']['newClientOrderId']]['executedQty']))
         self.agent.account()
@@ -230,6 +234,14 @@ class LifecycleTests(unittest.TestCase):
         self.agent.buy('BTCUSDT',order,self.client.sync_time(),order['initial_risk'])
         self.assertFalse(self.store.state['positions'])
         self.assertEqual(self.store.state['closed'][-1]['reason'],'POST_FILL_RISK_CHECK')
+        check=self.store.state['closed'][-1]['risk_check']
+        self.assertEqual(check['result'],'EXIT_REQUESTED')
+        self.assertEqual(check['cause'],'OVER_RISK_LIMIT')
+        self.assertGreater(D(check['estimated_loss']),D(check['threshold']))
+        self.assertEqual(D(check['net_qty'])-D(check['stop_qty']),D(check['remainder']))
+        reloaded=app.Store(self.path,'testnet')
+        try:self.assertEqual(reloaded.state['closed'][-1]['risk_check'],check)
+        finally:reloaded.db.close()
 
     def test_zec_style_gross_rounding_before_base_fee(self):
         self.enterContext(patch.dict(engine.settings.OVERRIDES, {'RISK_PERCENT': 1, 'MIN_POSITION_USDT': 9}))
