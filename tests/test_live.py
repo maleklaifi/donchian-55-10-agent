@@ -231,4 +231,18 @@ class LifecycleTests(unittest.TestCase):
         self.assertFalse(self.store.state['positions'])
         self.assertEqual(self.store.state['closed'][-1]['reason'],'POST_FILL_RISK_CHECK')
 
+    def test_zec_style_gross_rounding_before_base_fee(self):
+        self.enterContext(patch.dict(engine.settings.OVERRIDES, {'RISK_PERCENT': 1, 'MIN_POSITION_USDT': 9}))
+        self.store.state['cash']=187.77093133
+        self.client.cash=D('187.77093133')
+        info=copy.deepcopy(INFO)
+        info['filters'][1]['stepSize']='0.001'
+        self.agent.filters['BTCUSDT']=Filters(info)
+        self.client.price=D('1310.93')
+        order,reason=engine.size(self.store.state,{},1310.91,113.14043121022527)
+        self.assertEqual(reason,'accepted')
+        with self.assertRaises(ValueError):
+            self.agent.buy('BTCUSDT',order,self.client.sync_time(),order['initial_risk'])
+        self.assertFalse(self.client.sent)
+
 if __name__=='__main__':unittest.main()
