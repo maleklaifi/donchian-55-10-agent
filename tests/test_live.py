@@ -194,4 +194,55 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(len(self.client.sent),2)
         self.assertEqual(self.store.state['errors'],[])
 
+    def test_coarse_quantity_step_does_not_force_immediate_exit(self):
+        self.enterContext(patch.dict(engine.settings.OVERRIDES, {'RISK_PERCENT': 1}))
+        info=copy.deepcopy(INFO)
+        info['filters'][1]['stepSize']='0.01'
+        self.agent.filters['BTCUSDT']=Filters(info)
+        self.client.price=D('8.979')
+        order,_=engine.size(self.store.state,{},8.979,0.5908779770148966)
+        self.agent.buy('BTCUSDT',order,self.client.sync_time(),order['initial_risk'])
+        position=self.store.state['positions']['BTCUSDT']
+        self.assertEqual(position['phase'],'OPEN')
+        self.assertLessEqual(D(position['initial_risk']),D(order['initial_risk'])*D('1.001'))
+        self.assertEqual([x['type'] for x in self.client.sent],['MARKET','STOP_LOSS'])
+
+    def test_closed_trade_cost_allocates_unsold_dust(self):
+        self.enterContext(patch.dict(engine.settings.OVERRIDES, {'RISK_PERCENT': 1}))
+        info=copy.deepcopy(INFO)
+        info['filters'][1]['stepSize']='0.01'
+        self.agent.filters['BTCUSDT']=Filters(info)
+        self.client.price=D('8.979')
+        order,_=engine.size(self.store.state,{},8.979,0.5908779770148966)
+        self.agent.buy('BTCUSDT',order,self.client.sync_time(),order['initial_risk'])
+        position=self.store.state['positions']['BTCUSDT']
+        position.update(exit_requested=True,exit_reason='MANUAL_SELL')
+        self.agent.reconcile('BTCUSDT',self.client.sync_time())
+        closed=self.store.state['closed'][-1]
+        self.assertGreater(D(closed['dust']),0)
+        self.assertGreater(closed['dust_cost_basis'],0)
+        self.assertAlmostEqual(closed['dust_cost_basis'],closed['cost']*float(D(closed['dust']))/closed['qty'])
+
+    def test_adverse_fill_still_triggers_risk_exit(self):
+        self.enterContext(patch.dict(engine.settings.OVERRIDES, {'RISK_PERCENT': 1}))
+        order,_=engine.size(self.store.state,{},8.979,0.5908779770148966)
+        self.client.price=D('7.5')
+        self.agent.buy('BTCUSDT',order,self.client.sync_time(),order['initial_risk'])
+        self.assertFalse(self.store.state['positions'])
+        self.assertEqual(self.store.state['closed'][-1]['reason'],'POST_FILL_RISK_CHECK')
+
+    def test_zec_style_gross_rounding_before_base_fee(self):
+        self.enterContext(patch.dict(engine.settings.OVERRIDES, {'RISK_PERCENT': 1, 'MIN_POSITION_USDT': 9}))
+        self.store.state['cash']=187.77093133
+        self.client.cash=D('187.77093133')
+        info=copy.deepcopy(INFO)
+        info['filters'][1]['stepSize']='0.001'
+        self.agent.filters['BTCUSDT']=Filters(info)
+        self.client.price=D('1310.93')
+        order,reason=engine.size(self.store.state,{},1310.91,113.14043121022527)
+        self.assertEqual(reason,'accepted')
+        with self.assertRaises(ValueError):
+            self.agent.buy('BTCUSDT',order,self.client.sync_time(),order['initial_risk'])
+        self.assertFalse(self.client.sent)
+
 if __name__=='__main__':unittest.main()
