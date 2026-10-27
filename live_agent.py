@@ -87,9 +87,27 @@ class LiveAgent(Agent):
         quote=D(order['qty'])*D(order['entry'])
         precision=int(rule.info.get('quoteAssetPrecision',8))
         quote=quote.quantize(Decimal(1).scaleb(-precision),rounding=ROUND_DOWN)
-        # Reserve maximum modeled base commission before checking stop sellability.
-        estimated_qty=rule.quantity(D(order['qty'])*(1-D(engine.FEE)))
         stop=rule.stop(order['stop'])
+        # The risk check conservatively counts unsellable remainder as a loss.
+        # Size for that same check before submitting, including base fees and
+        # exchange quantity rounding. Do not credit dust as guaranteed proceeds.
+        budget=D(risk_budget)
+        fill=D(order['entry'])
+        step=Decimal(1).scaleb(-precision)
+        def modeled_loss(amount):
+            net=amount/fill*(1-D(engine.FEE))
+            return amount*(1+D(engine.FEE))-rule.quantity(net)*stop*(1-D(engine.SLIP))*(1-D(engine.FEE))
+        if modeled_loss(quote)>budget:
+            lo,hi=D(0),quote
+            for _ in range(80):
+                mid=(lo+hi)/2
+                if modeled_loss(mid)<=budget:lo=mid
+                else:hi=mid
+            quote=lo.quantize(step,rounding=ROUND_DOWN)
+            # Rounding steps make the modeled loss discontinuous; verify again.
+            if modeled_loss(quote)>budget:
+                raise ValueError('Cannot size safely for exchange quantity rounding')
+        estimated_qty=rule.quantity(quote/fill*(1-D(engine.FEE)))
         rule.validate(estimated_qty,stop)
         if quote<D(engine.setting('MIN_POSITION_USDT',10)):raise ValueError('Below strategy minimum entry')
         item=self.journal.intent(symbol,'BUY','MARKET',quoteOrderQty=quote)
@@ -162,7 +180,7 @@ class LiveAgent(Agent):
 
     def exit_remaining(self,p,now,rule):
         symbol=p['symbol']
-        sold=D(0);proceeds=D(0);sell_fees=D(0)
+        sold=D(0);proceeds=D(0);sell_fees=D(0);gross_qty=D(0);gross_quote=D(0)
         # Query every bot-owned sell; never duplicate a possibly active sell.
         for item in [p.get('stop_order'),*p['exit_orders']]:
             if not item:continue
@@ -172,6 +190,7 @@ class LiveAgent(Agent):
                 if order['status'] not in TERMINAL:
                     raise RuntimeError(f'{symbol}: existing sell is active; cannot submit another')
             qty,quote,base_fee,quote_fee=self.totals(p,item,order)
+            gross_qty+=qty;gross_quote+=quote
             sold+=qty+base_fee;proceeds+=quote-quote_fee;sell_fees+=quote_fee
         remaining=D(p['qty'])-sold
         if remaining<0:raise RuntimeError('Sell reconciliation exceeds owned quantity')
@@ -195,8 +214,14 @@ class LiveAgent(Agent):
         self.state['cash']+=float(proceeds)
         if remaining:
             self.state['dust'][p['base_asset']]=str(D(self.state['dust'].get(p['base_asset'],0))+remaining)
-        closed=dict(p,exited_at=now,reason=p['exit_reason'],exit=float(proceeds/sold) if sold else 0,
-                    pnl=float(proceeds)-p['cost'],exit_fee=float(sell_fees),dust=str(remaining))
+        # Allocate entry cost between the disposed asset and the unsold remainder.
+        # The latter stays in the wallet; its value is not realized sale proceeds.
+        total=D(p['qty'])
+        retained_cost=D(p['cost'])*remaining/total if total else D(0)
+        disposed_cost=D(p['cost'])-retained_cost
+        closed=dict(p,exited_at=now,reason=p['exit_reason'],exit=float(gross_quote/gross_qty) if gross_qty else 0,
+                    pnl=float(proceeds-disposed_cost),exit_fee=float(sell_fees),dust=str(remaining),
+                    dust_cost_basis=float(retained_cost))
         self.state['closed'].append(closed)
         del self.state['positions'][symbol]
         self.state['processed'][symbol]=now//engine.DAY*engine.DAY
