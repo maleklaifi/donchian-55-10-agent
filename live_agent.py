@@ -157,11 +157,10 @@ class LiveAgent(Agent):
                 net_qty=str(net), stop_qty=str(protected_qty), remainder=str(net-protected_qty),
                 fill_price=str(entry), stop_price=str(stop), fill_cost=str(quote+quote_fee),
                 estimated_loss=str(loss), risk_limit=str(p['risk_budget']), threshold=str(threshold))
-            self.state['errors']=[f'{symbol}: buy filled; exchange stop not yet acknowledged']
-            self.store.save()
             if failed:
                 p.update(exit_requested=True,exit_reason='POST_FILL_RISK_CHECK',phase='EXITING')
-                self.store.save()
+            self.state['errors']=[f'{symbol}: buy filled; exchange stop not yet acknowledged']
+            self.store.save()
         if p['phase']=='PROTECTING':
             qty=rule.quantity(p['qty'])
             if not p['stop_order']:
