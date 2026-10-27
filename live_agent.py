@@ -94,8 +94,13 @@ class LiveAgent(Agent):
         budget=D(risk_budget)
         fill=D(order['entry'])
         step=Decimal(1).scaleb(-precision)
+        def modeled_net(amount):
+            # Round the gross fill before deducting a base-asset commission.
+            # A second rounding is needed for the exchange stop quantity.
+            gross=rule.quantity(amount/fill)
+            return gross*(1-D(engine.FEE))
         def modeled_loss(amount):
-            net=amount/fill*(1-D(engine.FEE))
+            net=modeled_net(amount)
             return amount*(1+D(engine.FEE))-rule.quantity(net)*stop*(1-D(engine.SLIP))*(1-D(engine.FEE))
         if modeled_loss(quote)>budget:
             lo,hi=D(0),quote
@@ -107,7 +112,7 @@ class LiveAgent(Agent):
             # Rounding steps make the modeled loss discontinuous; verify again.
             if modeled_loss(quote)>budget:
                 raise ValueError('Cannot size safely for exchange quantity rounding')
-        estimated_qty=rule.quantity(quote/fill*(1-D(engine.FEE)))
+        estimated_qty=rule.quantity(modeled_net(quote))
         rule.validate(estimated_qty,stop)
         if quote<D(engine.setting('MIN_POSITION_USDT',10)):raise ValueError('Below strategy minimum entry')
         item=self.journal.intent(symbol,'BUY','MARKET',quoteOrderQty=quote)
