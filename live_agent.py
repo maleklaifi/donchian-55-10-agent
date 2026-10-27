@@ -146,9 +146,20 @@ class LiveAgent(Agent):
             self.state['cash']-=p['cost']
             loss=(quote+quote_fee)-rule.quantity(net)*stop*(1-D(engine.SLIP))*(1-D(engine.FEE))
             p['initial_risk']=float(max(D(0),loss))
+            protected_qty=rule.quantity(net)
+            threshold=D(p['risk_budget'])*D('1.001')
+            failed=stop<=0 or loss>threshold
+            # Retain the values used by the check with the position, so they
+            # remain visible after an emergency exit and across restarts.
+            p['risk_check']=dict(time=now, result='EXIT_REQUESTED' if failed else 'PASSED',
+                cause='INVALID_STOP' if stop<=0 else ('OVER_RISK_LIMIT' if loss>threshold else 'WITHIN_LIMIT'),
+                gross_qty=str(qty), base_fee=str(base_fee), quote_fee=str(quote_fee),
+                net_qty=str(net), stop_qty=str(protected_qty), remainder=str(net-protected_qty),
+                fill_price=str(entry), stop_price=str(stop), fill_cost=str(quote+quote_fee),
+                estimated_loss=str(loss), risk_limit=str(p['risk_budget']), threshold=str(threshold))
             self.state['errors']=[f'{symbol}: buy filled; exchange stop not yet acknowledged']
             self.store.save()
-            if stop<=0 or loss>D(p['risk_budget'])*D('1.001'):
+            if failed:
                 p.update(exit_requested=True,exit_reason='POST_FILL_RISK_CHECK',phase='EXITING')
                 self.store.save()
         if p['phase']=='PROTECTING':
